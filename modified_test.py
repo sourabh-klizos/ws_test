@@ -20,6 +20,7 @@ class UserBehavior:
     def __init__(self):
         self.all_users = []  # This will store the user_id and token of all the created users
         self.active_connections = 0  # Track the number of active WebSocket connections
+        self.lock = asyncio.Lock()  # To synchronize access to active_connections
 
     async def signup_and_login(self):
         # Generate random username, email, and password for signup
@@ -86,27 +87,22 @@ class UserBehavior:
         print(f"WebSocket URL ==================== {websocket_url}.")
 
         # Open a WebSocket connection and send a message using the websockets library
-        await self.send_message_via_websocket(websocket_url, current_id,selected_user_id)
+        await self.send_message_via_websocket(websocket_url, current_id, selected_user_id)
 
-    async def send_message_via_websocket(self, websocket_url,current_id ,selected_user_id):
+    async def send_message_via_websocket(self, websocket_url, current_id, selected_user_id):
         # Open a WebSocket connection using the websockets library
         async with websockets.connect(websocket_url) as ws:
-            self.active_connections += 1
+            async with self.lock:  # Ensure thread-safe update of active connections
+                self.active_connections += 1
             print(f"Active WebSocket connections: {self.active_connections}")
-
-        # async with websockets.connect("ws://localhost:8000/ws/status/?token={token}") as ws2:
-        #     self.active_connections += 1
 
             try:
                 while True:
-                    message = "Hello! This is a message from WebSocket load test."
-
                     message = {
-                            "text": "Hello! This is a message from WebSocket load test.",
-                            "sender_id": current_id,
-                            "receiver_id": selected_user_id,
-                            "created_at": datetime.now(),
-
+                        "text": "Hello! This is a message from WebSocket load test.",
+                        "sender_id": current_id,
+                        "receiver_id": selected_user_id,
+                        "created_at": datetime.now(),
                     }
                     message = json.dumps(message, default=str)
                     await ws.send(message)
@@ -117,11 +113,12 @@ class UserBehavior:
                     print(f"Received message: {response}")
 
                     # Wait before sending the next message
-                    await asyncio.sleep(random.uniform(1,2))  # Random delay between 1 to 5 seconds
+                    await asyncio.sleep(random.uniform(1, 2))  # Random delay between 1 to 2 seconds
             except websockets.ConnectionClosed:
                 print(f"Connection closed: {websocket_url}")
             finally:
-                self.active_connections -= 1
+                async with self.lock:  # Ensure thread-safe update of active connections
+                    self.active_connections -= 1
                 print(f"Active WebSocket connections after closure: {self.active_connections}")
 
     async def make_http_request(self, method, url, **kwargs):
@@ -135,27 +132,18 @@ class UserBehavior:
         """This method is called when a simulated user starts."""
         await asyncio.sleep(random.uniform(1, 3))  # Sleep to simulate real-world delay
 
-    def get_random_user_from_mongodb(self):
-        """Query a random user from MongoDB."""
-        count = users_collection.count_documents({})
-        if count == 0:
-            print("No users found in the database.")
-            return None
-
-        random_index = random.randint(0, count - 1)
-        random_user = users_collection.find().skip(random_index).limit(1).next()
-        return random_user
-
 # Run the load test
 async def main():
     user_behavior = UserBehavior()
     await user_behavior.on_start()
 
-    # Simulate signup and login for multiple users
-    await asyncio.gather(*[user_behavior.signup_and_login() for _ in range(10)])
+    # Simulate signup and login for multiple users concurrently
+    users_count = 10  # Number of users to simulate
+    await asyncio.gather(*[user_behavior.signup_and_login() for _ in range(users_count)])
 
-    # Simulate chat between random users
-    await asyncio.gather(*[user_behavior.chat_with_random_user() for _ in range(20)])
+    # Simulate chat between random users concurrently
+    chats_count = 200  # Number of chat interactions to simulate
+    await asyncio.gather(*[user_behavior.chat_with_random_user() for _ in range(chats_count)])
 
     # Keep the script running to maintain WebSocket connections
     while True:
